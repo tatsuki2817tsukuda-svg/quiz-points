@@ -3,54 +3,175 @@ let labs = [];
 let history = [];
 let editingLabIndex = null;
 let tournamentTitle = "Quiz Points Master";
-let qrcode = null;
+let isCompactMode = false;
+
+// 計算ルール (デフォルト値)
+let calcRules = {
+    rule1_4: 1,
+    rule5_8: 2,
+    rule9_10: 3
+};
+
+// 通知システム
+function notify(message, type = 'info') {
+    const container = document.getElementById('notification-container');
+    const notification = document.createElement('div');
+    notification.className = `notification ${type}`;
+    notification.innerHTML = `
+        <span>${message}</span>
+        <span style="margin-left: 1rem; cursor: pointer; opacity: 0.5;">✕</span>
+    `;
+    notification.onclick = () => notification.remove();
+    container.appendChild(notification);
+    
+    setTimeout(() => {
+        notification.style.opacity = '0';
+        notification.style.transform = 'translateX(20px)';
+        setTimeout(() => notification.remove(), 400);
+    }, 4000);
+}
+
+// サウンドシステム (シンプルなビープ音)
+function playSound(freq = 440, type = 'sine', duration = 0.1) {
+    try {
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        const oscillator = audioCtx.createOscillator();
+        const gainNode = audioCtx.createGain();
+
+        oscillator.type = type;
+        oscillator.frequency.setValueAtTime(freq, audioCtx.currentTime);
+        
+        gainNode.gain.setValueAtTime(0.1, audioCtx.currentTime);
+        gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + duration);
+
+        oscillator.connect(gainNode);
+        gainNode.connect(audioCtx.destination);
+
+        oscillator.start();
+        oscillator.stop(audioCtx.currentTime + duration);
+    } catch (e) {
+        console.warn("Sound play failed", e);
+    }
+}
+
+// スマホ同期用：URLハッシュの確認
+function checkSyncData() {
+    const hash = window.location.hash.substring(1);
+    if (!hash) return;
+
+    try {
+        const decoded = decodeURIComponent(escape(atob(hash)));
+        const data = JSON.parse(decoded);
+        
+        if (data && data.labs) {
+            if (confirm("URLから新しいスコアデータを読み込みますか？\n(現在のデータは上書きされます)")) {
+                labs = data.labs;
+                if (data.title) tournamentTitle = data.title;
+                saveData();
+                notify("データを読み込みました！", "success");
+            }
+        }
+    } catch (e) {
+        console.error("Sync data error:", e);
+    } finally {
+        // ハッシュをクリアしてリロード時の再確認を防ぐ
+        window.history.replaceState(null, null, window.location.pathname);
+    }
+}
+
+// スマホ同期モーダルの表示
+function showSyncModal() {
+    const modal = document.getElementById('sync-modal');
+    const data = JSON.stringify({ labs, title: tournamentTitle });
+    const encoded = btoa(unescape(encodeURIComponent(data)));
+    
+    // 現在のベースURL（ハッシュなし）を取得
+    const baseUrl = window.location.origin + window.location.pathname;
+    const syncUrl = `${baseUrl}#${encoded}`;
+
+    new QRious({
+        element: document.getElementById('sync-qr'),
+        value: syncUrl,
+        size: 250,
+        level: 'M'
+    });
+
+    modal.style.display = 'block';
+}
+
+// 全画面切り替えヘルパー
+function toggleFullscreen() {
+    if (!document.fullscreenElement) {
+        document.documentElement.requestFullscreen().catch(err => {
+            notify(`全画面表示を有効にできませんでした: ${err.message}`, "error");
+        });
+    } else {
+        if (document.exitFullscreen) document.exitFullscreen();
+    }
+}
 
 // 初期化
 function init() {
     const savedData = localStorage.getItem('quizPointsData');
     const savedHistory = localStorage.getItem('quizPointsHistory');
     const savedTitle = localStorage.getItem('quizTournamentTitle');
+    const savedRules = localStorage.getItem('quizCalcRules');
 
     if (savedTitle) {
         tournamentTitle = savedTitle;
         document.getElementById('tournament-title').textContent = tournamentTitle;
     }
 
+    if (savedRules) {
+        calcRules = JSON.parse(savedRules);
+        document.getElementById('rule-1-4').value = calcRules.rule1_4;
+        document.getElementById('rule-5-8').value = calcRules.rule5_8;
+        document.getElementById('rule-9-10').value = calcRules.rule9_10;
+    }
+
     if (savedData) {
-        labs = JSON.parse(savedData);
-        // 既存データへの互換性・ID欠落対応
-        labs.forEach((lab, index) => {
-            if (lab.id === undefined) lab.id = index;
-            if (lab.totalWrongCaused === undefined) lab.totalWrongCaused = 0;
-        });
-    } else {
-        for (let i = 0; i < TOTAL_LABS; i++) {
-            labs.push({
-                id: i,
-                name: `研究室 ${i + 1}`,
-                score: 0,
-                totalWrongCaused: 0
+        try {
+            labs = JSON.parse(savedData);
+            labs.forEach((lab, index) => {
+                if (lab.id === undefined) lab.id = index;
+                if (lab.totalWrongCaused === undefined) lab.totalWrongCaused = 0;
             });
+        } catch (e) {
+            console.error("Error parsing saved data:", e);
+            resetLabs();
         }
+    } else {
+        resetLabs();
     }
 
     if (savedHistory) {
         history = JSON.parse(savedHistory);
     }
 
+    checkSyncData(); // ハッシュがあれば上書き
+    
     renderScoreboard();
     renderFormControls();
     renderHistory();
     updateUndoButton();
-    saveData();
-    checkUrlHash(); // URLハッシュからのデータインポート確認
+    setupEventListeners();
+    setupKeyboardShortcuts();
+    
+    // コンパクトモードの初期状態
+    isCompactMode = localStorage.getItem('compactMode') === 'true';
+    if (isCompactMode) document.body.classList.add('compact-mode');
+}
 
-    // タイトル編集の保存
-    document.getElementById('tournament-title').onblur = function() {
-        tournamentTitle = this.textContent.trim() || "Quiz Points Master";
-        this.textContent = tournamentTitle;
-        saveData();
-    };
+function resetLabs() {
+    labs = [];
+    for (let i = 0; i < TOTAL_LABS; i++) {
+        labs.push({
+            id: i,
+            name: `研究室 ${i + 1}`,
+            score: 0,
+            totalWrongCaused: 0
+        });
+    }
 }
 
 // データ保存
@@ -58,30 +179,50 @@ function saveData() {
     localStorage.setItem('quizPointsData', JSON.stringify(labs));
     localStorage.setItem('quizPointsHistory', JSON.stringify(history));
     localStorage.setItem('quizTournamentTitle', tournamentTitle);
+    localStorage.setItem('quizCalcRules', JSON.stringify(calcRules));
+    localStorage.setItem('compactMode', isCompactMode);
+    
+    // オートバックアップ
+    localStorage.setItem('quizPoints_backup_' + new Date().getMinutes(), JSON.stringify({
+        labs, history, title: tournamentTitle, rules: calcRules, time: new Date().toLocaleTimeString()
+    }));
 }
 
-// スコアボード描画（ソート機能付き）
+// スコアボード描画
 function renderScoreboard() {
     const scoreboard = document.getElementById('scoreboard');
-    // スコアが同じ場合、totalWrongCaused が多い方を優先
     const sortedLabs = [...labs].sort((a, b) => {
         if (b.score !== a.score) return b.score - a.score;
-        return b.totalWrongCaused - a.totalWrongCaused || a.id - b.id;
+        if (b.totalWrongCaused !== a.totalWrongCaused) return b.totalWrongCaused - a.totalWrongCaused;
+        return a.id - b.id; // 描画順を安定させるためにIDを使用
     });
+
+    // 順位の計算
+    let currentRank = 1;
+    sortedLabs.forEach((lab, i) => {
+        if (i > 0) {
+            const prev = sortedLabs[i - 1];
+            if (lab.score !== prev.score || lab.totalWrongCaused !== prev.totalWrongCaused) {
+                currentRank = i + 1;
+            }
+        }
+        lab.currentRank = currentRank;
+    });
+
     const maxScore = Math.max(...labs.map(l => l.score));
     
     scoreboard.innerHTML = '';
     
     sortedLabs.forEach((lab, index) => {
         const card = document.createElement('div');
-        const isLeader = lab.score > 0 && lab.score === maxScore;
+        const isLeader = lab.currentRank === 1 && lab.score > 0;
         card.className = `score-card ${isLeader ? 'rank-1' : ''}`;
         card.style.animationDelay = `${index * 0.05}s`;
         card.onclick = () => openEditModal(lab.id);
         
         card.innerHTML = `
-            <span class="lab-name">${lab.name}</span>
-            <span class="lab-score" id="score-${lab.id}">${lab.score}</span>
+            <span class="lab-name"><small style="opacity:0.5; font-size: 0.7rem; margin-right: 0.3rem;">#${lab.currentRank}</small>${lab.name}</span>
+            <span class="lab-score" id="score-${lab.id}">${lab.score}<span class="tie-break-score" title="出題ボーナス (不正解を導いた数)">(ボ: ${lab.totalWrongCaused || 0})</span></span>
         `;
         scoreboard.appendChild(card);
     });
@@ -92,17 +233,35 @@ function animateScoreChange(labId, start, end) {
     const el = document.getElementById(`score-${labId}`);
     if (!el) return;
 
+    // スコア変動演出
+    el.classList.add('score-animate');
+    setTimeout(() => el.classList.remove('score-animate'), 500);
+
+    // 浮き出る数字
+    const diff = end - start;
+    if (diff > 0) {
+        const float = document.createElement('span');
+        float.className = 'score-change-float';
+        float.textContent = `+${diff}`;
+        el.parentElement.appendChild(float);
+        setTimeout(() => float.remove(), 1000);
+        playSound(660 + diff * 10, 'sine', 0.15);
+    }
+
     let current = start;
     const duration = 500;
-    const stepTime = Math.abs(Math.floor(duration / (end - start || 1)));
+    const steps = Math.abs(end - start) || 1;
+    const stepTime = Math.max(duration / steps, 50);
     
     const timer = setInterval(() => {
         if (start < end) current++;
         else current--;
         
-        el.textContent = current;
+        // 出題ボーナス部分を保持しつつ、数値部分だけを更新
+        const scoreLab = labs.find(l => l.id === labId);
+        el.innerHTML = `${current}<span class="tie-break-score">(ボ: ${scoreLab.totalWrongCaused || 0})</span>`;
         if (current === end) clearInterval(timer);
-    }, Math.max(stepTime, 50));
+    }, stepTime);
 }
 
 // フォームのコントロール描画
@@ -111,21 +270,23 @@ function renderFormControls() {
     const correctLabsGrid = document.getElementById('correct-labs-grid');
     const currentHostValue = hostSelect.value;
     
-    hostSelect.innerHTML = '<option value="" disabled selected>選択してください</option>';
+    hostSelect.innerHTML = '<option value="" disabled selected>出題研究室を選択...</option>';
     correctLabsGrid.innerHTML = '';
     
-    labs.forEach((lab) => {
+    labs.forEach((lab, i) => {
         const option = document.createElement('option');
         option.value = lab.id;
         option.textContent = lab.name;
         hostSelect.appendChild(option);
         
+        const kbdHint = i < 9 ? (i + 1) : (i === 9 ? '0' : (i === 10 ? '-' : '='));
         const label = document.createElement('label');
         label.className = 'checkbox-item';
         label.id = `lab-item-${lab.id}`;
         label.innerHTML = `
             <input type="checkbox" name="correct-lab" value="${lab.id}" onchange="updatePreview()">
             <span>${lab.name}</span>
+            <span class="kbd-hint">${kbdHint}</span>
         `;
         correctLabsGrid.appendChild(label);
     });
@@ -134,11 +295,6 @@ function renderFormControls() {
         hostSelect.value = currentHostValue;
         updateCheckboxState();
     }
-
-    hostSelect.onchange = () => {
-        updateCheckboxState();
-        updatePreview();
-    };
 }
 
 function updateCheckboxState() {
@@ -166,94 +322,401 @@ function updatePreview() {
     const correctCheckboxes = document.querySelectorAll('input[name="correct-lab"]:checked');
     const wrongCount = (TOTAL_LABS - 1) - correctCheckboxes.length;
     const hostPoints = calculatePoints(wrongCount);
-    document.getElementById('preview-points').textContent = hostPoints;
     
-    // プレビューの文言を少し親切にする
     const previewEl = document.getElementById('result-preview');
     const correctCount = correctCheckboxes.length;
     previewEl.innerHTML = `出題者: <span id="preview-points">${hostPoints}</span>点 / 正解者: 各1点 (計${correctCount}点)`;
 }
 
 function calculatePoints(wrongCount) {
-    if (wrongCount >= 1 && wrongCount <= 4) return 1;
-    if (wrongCount >= 5 && wrongCount <= 8) return 2;
-    if (wrongCount >= 9 && wrongCount <= 10) return 3;
+    if (wrongCount >= 1 && wrongCount <= 4) return calcRules.rule1_4;
+    if (wrongCount >= 5 && wrongCount <= 8) return calcRules.rule5_8;
+    if (wrongCount >= 9 && wrongCount <= 10) return calcRules.rule9_10;
     return 0;
 }
 
-// ポイント加算
-document.getElementById('point-form').onsubmit = (e) => {
-    e.preventDefault();
-    const hostId = parseInt(document.getElementById('host-lab').value);
-    if (isNaN(hostId)) {
-        alert("出題研究室を選択してください");
-        return;
-    }
+// イベントリスナー設定
+function setupEventListeners() {
+    // 全画面表示
+    document.getElementById('fullscreen-btn').onclick = toggleFullscreen;
+    document.getElementById('results-fullscreen-btn').onclick = toggleFullscreen;
+    document.getElementById('sync-btn').onclick = showSyncModal;
 
-    const correctCheckboxes = document.querySelectorAll('input[name="correct-lab"]:checked');
-    const correctIds = Array.from(correctCheckboxes).map(cb => parseInt(cb.value));
-    const correctCount = correctIds.length;
-    const wrongCount = (TOTAL_LABS - 1) - correctCount;
-    const hostPoints = calculatePoints(wrongCount);
+    // ポイント加算
+    document.getElementById('point-form').onsubmit = (e) => {
+        e.preventDefault();
+        const hostId = parseInt(document.getElementById('host-lab').value);
+        if (isNaN(hostId)) {
+            notify("出題研究室を選択してください", "warn");
+            return;
+        }
 
-    if (hostPoints === 0 && correctCount === 0) {
-        alert("加点されるポイントがありません。正解の研究室数を確認してください。");
-        return;
-    }
+        const correctCheckboxes = document.querySelectorAll('input[name="correct-lab"]:checked');
+        const correctIds = Array.from(correctCheckboxes).map(cb => parseInt(cb.value));
+        const correctCount = correctIds.length;
+        const wrongCount = (TOTAL_LABS - 1) - correctCount;
+        const hostPoints = calculatePoints(wrongCount);
 
-    const hostName = labs.find(l => l.id === hostId).name;
-    let confirmMsg = `${hostName} に ${hostPoints} ポイント加算`;
-    if (correctCount > 0) {
-        confirmMsg += `、正解した ${correctCount} チームに各1ポイント加算しますか？`;
-    } else {
-        confirmMsg += `しますか？`;
-    }
-    
-    if (!confirm(confirmMsg + `\n(正解: ${correctCount}, 不正解: ${wrongCount})`)) return;
+        if (hostPoints === 0 && correctCount === 0) {
+            notify("加点されるポイントがありません", "warn");
+            return;
+        }
 
-    // 履歴に追加
-    const action = {
-        timestamp: new Date().toLocaleTimeString(),
-        hostId: hostId,
-        hostName: hostName,
-        hostPoints: hostPoints,
-        correctIds: correctIds,
-        wrongCount: wrongCount,
-        correctCount: correctCount
+        const hostName = labs.find(l => l.id === hostId).name;
+        
+        // 履歴に追加
+        history.unshift({
+            timestamp: new Date().toLocaleTimeString(),
+            hostId, hostName, hostPoints, correctIds, wrongCount, correctCount
+        });
+        if (history.length > 30) history.pop();
+
+        // 加点処理
+        const oldHostScore = labs[hostId].score;
+        labs[hostId].score += hostPoints;
+        labs[hostId].totalWrongCaused += wrongCount;
+        animateScoreChange(hostId, oldHostScore, labs[hostId].score);
+
+        correctIds.forEach(id => {
+            const oldScore = labs[id].score;
+            labs[id].score += 1;
+            animateScoreChange(id, oldScore, labs[id].score);
+        });
+
+        renderScoreboard();
+        renderHistory();
+        updateUndoButton();
+        saveData();
+        notify(`${hostName}に${hostPoints}点加算しました`);
+        
+        document.getElementById('point-form').reset();
+        updateCheckboxState();
+        document.getElementById('preview-points').textContent = "0";
     };
-    history.unshift(action);
-    if (history.length > 20) history.pop();
 
-    // 出題者への加点
-    const oldHostScore = labs[hostId].score;
-    labs[hostId].score += hostPoints;
-    labs[hostId].totalWrongCaused += wrongCount;
-    animateScoreChange(hostId, oldHostScore, labs[hostId].score);
+    // 出題者変更時にチェックボックス更新
+    document.getElementById('host-lab').onchange = () => {
+        updateCheckboxState();
+        updatePreview();
+    };
 
-    // 正解者への加点（各1点）
-    correctIds.forEach(id => {
-        const oldScore = labs[id].score;
-        labs[id].score += 1;
-        animateScoreChange(id, oldScore, labs[id].score);
+    // クイックアクション
+    document.getElementById('select-all-btn').onclick = () => {
+        document.querySelectorAll('input[name="correct-lab"]:not(:disabled)').forEach(cb => cb.checked = true);
+        updatePreview();
+    };
+    document.getElementById('clear-all-btn').onclick = () => {
+        document.querySelectorAll('input[name="correct-lab"]').forEach(cb => cb.checked = false);
+        updatePreview();
+    };
+
+    // 各種モーダル開閉
+    document.getElementById('settings-btn').onclick = () => document.getElementById('settings-modal').style.display = 'block';
+    document.getElementById('data-manage-btn').onclick = () => document.getElementById('data-modal').style.display = 'block';
+    
+    document.getElementById('settings-cancel').onclick = () => document.getElementById('settings-modal').style.display = 'none';
+    document.getElementById('data-close').onclick = () => document.getElementById('data-modal').style.display = 'none';
+    document.getElementById('modal-cancel').onclick = () => document.getElementById('edit-modal').style.display = 'none';
+    document.getElementById('recover-close').onclick = () => document.getElementById('recover-modal').style.display = 'none';
+    
+    // 設定保存
+    document.getElementById('settings-save').onclick = () => {
+        calcRules = {
+            rule1_4: parseInt(document.getElementById('rule-1-4').value) || 0,
+            rule5_8: parseInt(document.getElementById('rule-5-8').value) || 0,
+            rule9_10: parseInt(document.getElementById('rule-9-10').value) || 0
+        };
+        saveData();
+        document.getElementById('settings-modal').style.display = 'none';
+        notify("計算ルールを保存しました");
+    };
+
+    // データ操作
+    document.getElementById('export-json-btn').onclick = exportJSON;
+    document.getElementById('import-json-btn').onclick = () => document.getElementById('json-input').click();
+    document.getElementById('json-input').onchange = importJSON;
+    document.getElementById('export-csv-btn').onclick = exportCSV;
+
+    // 手動修正保存
+    document.getElementById('modal-save').onclick = () => {
+        const newName = document.getElementById('edit-name-input').value.trim();
+        const newScore = parseInt(document.getElementById('edit-score-input').value);
+        const newWrong = parseInt(document.getElementById('edit-wrong-input').value);
+        if (newName && !isNaN(newScore)) {
+            labs[editingLabIndex].name = newName;
+            labs[editingLabIndex].score = newScore;
+            labs[editingLabIndex].totalWrongCaused = isNaN(newWrong) ? 0 : newWrong;
+            renderScoreboard();
+            renderFormControls();
+            saveData();
+            document.getElementById('edit-modal').style.display = 'none';
+            notify(`${newName}のデータを修正しました`);
+        }
+    };
+
+    // コンパクトモード
+    document.getElementById('toggle-compact').onclick = () => {
+        isCompactMode = !isCompactMode;
+        document.body.classList.toggle('compact-mode', isCompactMode);
+        saveData();
+    };
+
+    // 結果発表
+    document.getElementById('show-results-btn').onclick = showFullResults;
+    document.getElementById('results-close').onclick = () => {
+        document.getElementById('results-modal').style.display = 'none';
+        stopConfetti();
+    };
+
+    // Undo
+    document.getElementById('undo-btn').onclick = undoLastAction;
+
+    // タイトル編集
+    document.getElementById('tournament-title').onblur = function() {
+        tournamentTitle = this.textContent.trim() || "Quiz Points Master";
+        this.textContent = tournamentTitle;
+        saveData();
+    };
+    
+    // 復元
+    document.getElementById('recover-btn').onclick = showRecoverModal;
+
+    // 全リセット
+    document.getElementById('reset-btn').onclick = () => {
+        if (confirm("研究室名は残したまま、全てのスコアと履歴をリセットしますか？\n(この操作は取り消せません)")) {
+            labs.forEach(lab => {
+                lab.score = 0;
+                lab.totalWrongCaused = 0;
+            });
+            history = [];
+            // tournamentTitle = "Quiz Points Master"; // タイトルも保持する方が自然
+            saveData();
+            location.reload();
+        }
+    };
+}
+
+// 結果発表演出
+function showFullResults() {
+    const sortedWithRank = [...labs].sort((a, b) => {
+        if (b.score !== a.score) return b.score - a.score;
+        return b.totalWrongCaused - a.totalWrongCaused;
     });
 
-    renderScoreboard();
-    renderHistory();
-    updateUndoButton();
-    saveData();
+    let currentRank = 1;
+    const rankedLabs = sortedWithRank.map((lab, i) => {
+        if (i > 0) {
+            const prev = sortedWithRank[i - 1];
+            if (lab.score !== prev.score || lab.totalWrongCaused !== prev.totalWrongCaused) {
+                currentRank = i + 1;
+            }
+        }
+        return { ...lab, rank: currentRank };
+    });
 
-    document.getElementById('point-form').reset();
-    updateCheckboxState();
-    updatePreview();
-};
+    const modal = document.getElementById('results-modal');
+    const container = modal.querySelector('.results-container');
+    const items = [
+        { rank: 3, delay: 2000, sound: 440, shake: true },
+        { rank: 2, delay: 5000, sound: 554, shake: true },
+        { rank: 1, delay: 9000, sound: 659, shake: true, flash: true }
+    ];
 
+    // 全リセット
+    const lowerRankingsEl = document.getElementById('lower-rankings');
+    lowerRankingsEl.innerHTML = '';
+    lowerRankingsEl.classList.remove('revealed');
+
+    [1, 2, 3].forEach(rank => {
+        const item = document.querySelector(`.podium-item.rank-${rank}`);
+        item.classList.remove('revealed');
+        item.style.display = 'none';
+        
+        const labsInRank = rankedLabs.filter(l => l.rank === rank);
+        if (labsInRank.length > 0 && (labsInRank[0].score > 0 || rank === 1)) {
+            const names = labsInRank.map(l => l.name).join('<br>');
+            const score = labsInRank[0].score;
+            document.getElementById(`rank-${rank}-name`).innerHTML = names;
+            document.getElementById(`rank-${rank}-score`).textContent = `${score} pts`;
+            item.style.display = 'flex';
+            
+            if (labsInRank.length > 1) {
+                item.classList.add('has-tie');
+            } else {
+                item.classList.remove('has-tie');
+            }
+        }
+    });
+
+    const lowerLabs = rankedLabs.filter(l => l.rank > 3);
+    lowerRankingsEl.innerHTML = lowerLabs.map((lab) => `
+        <div class="ranking-row">
+            <span class="rank-num">${lab.rank}</span>
+            <span class="rank-name">${lab.name}</span>
+            <span class="rank-score">${lab.score} pts</span>
+        </div>
+    `).join('');
+
+    modal.style.display = 'block';
+    container.classList.remove('shake-active', 'flash-active');
+    notify("究極の結果発表を開始します...", "info");
+
+    // 順次表示
+    items.forEach(config => {
+        setTimeout(() => {
+            const item = document.querySelector(`.podium-item.rank-${config.rank}`);
+            if (item.style.display !== 'none') {
+                item.classList.add('revealed');
+                
+                // 画面の揺れ
+                if (config.shake) {
+                    container.classList.remove('shake-active');
+                    void container.offsetWidth; // reflow
+                    container.classList.add('shake-active');
+                }
+
+                // フラッシュ
+                if (config.flash) {
+                    container.classList.add('flash-active');
+                    playSound(220, 'square', 0.5); // 衝撃音
+                }
+
+                playSound(config.sound, 'sine', 0.4);
+                
+                if (config.rank === 1) {
+                    startConfetti(400); // 大量の紙吹雪
+                    // 連続バースト
+                    setTimeout(() => startConfetti(200), 1000);
+                    setTimeout(() => startConfetti(200), 2000);
+                    
+                    playSound(880, 'sine', 1.0);
+                    notify("✨🏆 優勝おめでとうございます！ 🏆✨", "success");
+
+                    // 1位発表の少し後に4位以下を表示
+                    setTimeout(() => {
+                        lowerRankingsEl.classList.add('revealed');
+                        playSound(330, 'sine', 0.3);
+                    }, 1500);
+                }
+            }
+        }, config.delay);
+    });
+}
+
+// 紙吹雪システム
+let confettiActive = false;
+let confettiParticles = [];
+function startConfetti(count = 150) {
+    const canvas = document.getElementById('confetti-canvas');
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+    
+    // すでに動いている場合は追加するだけ
+    if (!confettiActive) {
+        confettiActive = true;
+        confettiParticles = [];
+        animate();
+    }
+
+    for (let i = 0; i < count; i++) {
+        confettiParticles.push({
+            x: Math.random() * canvas.width,
+            y: Math.random() * canvas.height - canvas.height,
+            size: Math.random() * 10 + 5,
+            color: `hsl(${Math.random() * 360}, 80%, 60%)`,
+            velocity: { 
+                x: Math.random() * 6 - 3, 
+                y: Math.random() * 5 + 4 // 少し速くした
+            },
+            rotation: Math.random() * 360,
+            rotationSpeed: Math.random() * 15 - 7.5
+        });
+    }
+
+    function animate() {
+        if (!confettiActive) return;
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        
+        // 画面外に完全に消えたら粒子を削除するロジック（オプション）
+        // ここでは簡易的に保持
+        
+        confettiParticles.forEach(p => {
+            p.x += p.velocity.x;
+            p.y += p.velocity.y;
+            p.rotation += p.rotationSpeed;
+            if (p.y > canvas.height) p.y = -20;
+            
+            ctx.save();
+            ctx.translate(p.x, p.y);
+            ctx.rotate(p.rotation * Math.PI / 180);
+            ctx.fillStyle = p.color;
+            ctx.fillRect(-p.size/2, -p.size/2, p.size, p.size);
+            ctx.restore();
+        });
+        requestAnimationFrame(animate);
+    }
+}
+
+function stopConfetti() {
+    confettiActive = false;
+    const canvas = document.getElementById('confetti-canvas');
+    canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height);
+}
+
+// データエクスポート/インポート
+function exportJSON() {
+    const data = { labs, history, calcRules, tournamentTitle, version: "2.0" };
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `quiz_full_backup_${new Date().toISOString().slice(0,10)}.json`;
+    a.click();
+    notify("フルデータをJSONで保存しました");
+}
+
+function importJSON(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (event) => {
+        try {
+            const data = JSON.parse(event.target.result);
+            if (confirm("データを復元しますか？（現在のデータは上書きされます）")) {
+                labs = data.labs || labs;
+                history = data.history || [];
+                calcRules = data.calcRules || calcRules;
+                tournamentTitle = data.tournamentTitle || tournamentTitle;
+                document.getElementById('tournament-title').textContent = tournamentTitle;
+                saveData();
+                location.reload();
+            }
+        } catch (err) {
+            notify("ファイルの読み込みに失敗しました", "warn");
+        }
+    };
+    reader.readAsText(file);
+}
+
+function exportCSV() {
+    let csv = "研究室名,スコア,出題ボーナス\n";
+    labs.forEach(lab => csv += `${lab.name},${lab.score},${lab.totalWrongCaused}\n`);
+    const blob = new Blob([new Uint8Array([0xEF, 0xBB, 0xBF]), csv], { type: 'text/csv;charset=utf-8' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `quiz_results.csv`;
+    a.click();
+}
+
+// 履歴・Undo
 function renderHistory() {
     const log = document.getElementById('history-log');
     if (history.length === 0) {
         log.innerHTML = '<p class="empty-msg">履歴はまだありません</p>';
         return;
     }
-
     log.innerHTML = history.map(item => `
         <div class="history-item">
             <span class="history-desc"><strong>${item.hostName}</strong> +${item.hostPoints}点 / 正解者 +1点 (${item.correctCount}名)</span>
@@ -262,160 +725,82 @@ function renderHistory() {
     `).join('');
 }
 
-function updateUndoButton() {
-    document.getElementById('undo-btn').disabled = history.length === 0;
-}
+function updateUndoButton() { document.getElementById('undo-btn').disabled = history.length === 0; }
 
-// Undo機能
-document.getElementById('undo-btn').onclick = () => {
+function undoLastAction() {
     if (history.length === 0) return;
-    const lastAction = history.shift();
-    
-    // 出題者のスコア戻し
-    const hostLab = labs.find(l => l.id == lastAction.hostId);
-    if (hostLab) {
-        const oldHostScore = hostLab.score;
-        const pointsToSubtract = lastAction.hostPoints !== undefined ? lastAction.hostPoints : (lastAction.points || 0);
-        const wrongCountToSubtract = lastAction.wrongCount || 0;
-
-        hostLab.score = (hostLab.score || 0) - pointsToSubtract;
-        hostLab.totalWrongCaused = (hostLab.totalWrongCaused || 0) - wrongCountToSubtract;
-        animateScoreChange(hostLab.id, oldHostScore, hostLab.score);
+    const last = history.shift();
+    const host = labs.find(l => l.id == last.hostId);
+    if (host) {
+        host.score -= last.hostPoints;
+        host.totalWrongCaused -= last.wrongCount;
     }
-
-    // 正解者のスコア戻し
-    if (lastAction.correctIds) {
-        lastAction.correctIds.forEach(id => {
-            const lab = labs.find(l => l.id === id);
-            const oldScore = lab.score;
-            lab.score -= 1;
-            animateScoreChange(id, oldScore, lab.score);
-        });
-    }
-
+    last.correctIds.forEach(id => {
+        const lab = labs.find(l => l.id === id);
+        if (lab) lab.score -= 1;
+    });
     renderScoreboard();
     renderHistory();
     updateUndoButton();
     saveData();
-};
-
-// CSV出力
-document.getElementById('export-btn').onclick = () => {
-    let csv = "研究室名,スコア\n";
-    labs.forEach(lab => {
-        csv += `${lab.name},${lab.score}\n`;
-    });
-
-    const blob = new Blob([new Uint8Array([0xEF, 0xBB, 0xBF]), csv], { type: 'text/csv;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `quiz_results_${new Date().toLocaleDateString()}.csv`;
-    a.click();
-};
-
-// 全リセット
-document.getElementById('reset-btn').onclick = () => {
-    if (confirm("すべてのスアと履歴を0にリセットしますか？")) {
-        labs.forEach(lab => lab.score = 0);
-        history = [];
-        renderScoreboard();
-        renderHistory();
-        updateUndoButton();
-        saveData();
-    }
-};
-
-// 編集モーダル
-function openEditModal(id) {
-    editingLabIndex = labs.findIndex(l => l.id === id);
-    const modal = document.getElementById('edit-modal');
-    const input = document.getElementById('edit-name-input');
-    input.value = labs[editingLabIndex].name;
-    modal.style.display = 'block';
-    input.focus();
+    notify("最後のアクションを取り消しました", "warn");
 }
 
-document.getElementById('modal-cancel').onclick = () => {
-    document.getElementById('edit-modal').style.display = 'none';
-};
+// 手動修正モーダル
+function openEditModal(id) {
+    editingLabIndex = labs.findIndex(l => l.id === id);
+    const lab = labs[editingLabIndex];
+    document.getElementById('edit-name-input').value = lab.name;
+    document.getElementById('edit-score-input').value = lab.score;
+    document.getElementById('edit-wrong-input').value = lab.totalWrongCaused || 0;
+    document.getElementById('edit-modal').style.display = 'block';
+}
 
-document.getElementById('modal-save').onclick = () => {
-    const newName = document.getElementById('edit-name-input').value.trim();
-    if (newName) {
-        labs[editingLabIndex].name = newName;
-        renderScoreboard();
-        renderFormControls();
-        saveData();
-        document.getElementById('edit-modal').style.display = 'none';
+// 復元モーダル
+function showRecoverModal() {
+    const listEl = document.getElementById('backup-list');
+    listEl.innerHTML = '';
+    let hasBackups = false;
+    for (let i = 0; i < 60; i++) {
+        const key = 'quizPoints_backup_' + i;
+        const dataStr = localStorage.getItem(key);
+        if (dataStr) {
+            hasBackups = true;
+            const data = JSON.parse(dataStr);
+            const item = document.createElement('div');
+            item.className = 'backup-item';
+            item.innerHTML = `<span>${data.time} - ${data.title}</span>`;
+            item.onclick = () => {
+                if (confirm("このバックバックから復元しますか？")) {
+                    labs = data.labs; history = data.history || []; calcRules = data.rules || calcRules;
+                    tournamentTitle = data.title; saveData(); location.reload();
+                }
+            };
+            listEl.appendChild(item);
+        }
     }
-};
-// QRコード共有
-document.getElementById('share-qr-btn').onclick = () => {
-    // データを極力短くする（キー名の短縮）
-    const data = {
-        t: tournamentTitle,
-        l: labs.map(l => {
-            const arr = [l.name, l.score];
-            if (l.totalWrongCaused > 0) arr.push(l.totalWrongCaused);
-            return arr;
-        })
-    };
-    
-    // データをBase64エンコードしてURLハッシュに含める
-    const jsonStr = JSON.stringify(data);
-    const encodedData = btoa(unescape(encodeURIComponent(jsonStr)));
-    const shareUrl = `${window.location.origin}${window.location.pathname}#sync=${encodedData}`;
+    if (!hasBackups) listEl.innerHTML = '<p class="empty-msg">バックアップなし</p>';
+    document.getElementById('recover-modal').style.display = 'block';
+}
 
-    // QRコード生成
-    const container = document.getElementById('qrcode-container');
-    container.innerHTML = '';
-    qrcode = new QRCode(container, {
-        text: shareUrl,
-        width: 256,
-        height: 256,
-        colorDark : "#0f172a",
-        colorLight : "#ffffff",
-        correctLevel : QRCode.CorrectLevel.M // HからMに変更して密度を下げる
+// キーボードショートカット
+function setupKeyboardShortcuts() {
+    const keyMap = { '1':0,'2':1,'3':2,'4':3,'5':4,'6':5,'7':6,'8':7,'9':8,'0':9,'-':10,'=':11 };
+    document.addEventListener('keydown', (e) => {
+        if (e.target.tagName === 'INPUT' || e.target.contentEditable === 'true') return;
+        if (e.ctrlKey && e.key === 'z') { e.preventDefault(); undoLastAction(); }
+        if (e.key.toLowerCase() === 'f') { e.preventDefault(); toggleFullscreen(); }
+        if (e.key === 'Escape') { document.querySelectorAll('.modal').forEach(m => m.style.display = 'none'); stopConfetti(); }
+        if (keyMap[e.key] !== undefined) {
+            const checkboxes = document.querySelectorAll('input[name="correct-lab"]');
+            if (checkboxes[keyMap[e.key]] && !checkboxes[keyMap[e.key]].disabled) {
+                checkboxes[keyMap[e.key]].checked = !checkboxes[keyMap[e.key]].checked;
+                updatePreview();
+                playSound(440, 'triangle', 0.05);
+            }
+        }
     });
-
-    document.getElementById('qr-modal').style.display = 'block';
-};
-
-// 同期コードのコピー
-document.getElementById('copy-sync-btn').onclick = () => {
-    const data = {
-        t: tournamentTitle,
-        l: labs.map(l => {
-            const arr = [l.name, l.score];
-            if (l.totalWrongCaused > 0) arr.push(l.totalWrongCaused);
-            return arr;
-        })
-    };
-    const jsonStr = JSON.stringify(data);
-    const encodedData = btoa(unescape(encodeURIComponent(jsonStr)));
-    const syncCode = `sync=${encodedData}`;
-
-    navigator.clipboard.writeText(syncCode).then(() => {
-        alert("同期コードをクリップボードにコピーしました！これを別の端末に送ってください。");
-    });
-};
-
-// コードから復元
-document.getElementById('import-btn').onclick = () => {
-    const code = prompt("コピーした同期コードを貼り付けてください：");
-    if (code) {
-        let cleanCode = code.trim();
-        if (cleanCode.includes('#sync=')) cleanCode = cleanCode.split('#sync=')[1];
-        else if (cleanCode.startsWith('sync=')) cleanCode = cleanCode.replace('sync=', '');
-        
-        processImport(cleanCode);
-    }
-};
-
-document.getElementById('qr-close').onclick = () => {
-    document.getElementById('qr-modal').style.display = 'none';
-};
+}
 
 // URLハッシュのチェックとインポート
 function checkUrlHash() {
@@ -423,51 +808,22 @@ function checkUrlHash() {
     if (hash.startsWith('#sync=')) {
         const encodedData = hash.replace('#sync=', '');
         processImport(encodedData);
-        // ハッシュをクリア
         window.history.replaceState(null, null, window.location.pathname);
     }
 }
 
-// 実際のインポート処理（共通化）
 function processImport(encodedData) {
     try {
         const jsonStr = decodeURIComponent(escape(atob(encodedData)));
         const data = JSON.parse(jsonStr);
-        
-        if (confirm(`共有されたデータ「${data.t || data.title}」をインポートしますか？\n現在のデータは上書きわれます。`)) {
+        if (confirm(`共有されたデータ「${data.t || data.title}」をインポートしますか？`)) {
             tournamentTitle = data.t || data.title || "Quiz Points Master";
-            document.getElementById('tournament-title').textContent = tournamentTitle;
-            
-            const labsData = data.l || data.labs || [];
-            labs = labsData.map((l, index) => {
-                if (Array.isArray(l)) {
-                    return {
-                        id: index,
-                        name: l[0],
-                        score: l[1],
-                        totalWrongCaused: l[2] || 0
-                    };
-                }
-                return {
-                    id: index,
-                    name: l.name,
-                    score: l.score,
-                    totalWrongCaused: l.totalWrongCaused || 0
-                };
-            });
-            
-            history = []; // 履歴はリセット
-            renderScoreboard();
-            renderFormControls();
-            renderHistory();
-            updateUndoButton();
-            saveData();
-            alert("データのインポートが完了しました！");
+            labs = (data.l || data.labs || []).map((l, index) => ({
+                id: index, name: l.name || l[0], score: l.score || l[1], totalWrongCaused: l.totalWrongCaused || l[2] || 0
+            }));
+            history = []; saveData(); location.reload();
         }
-    } catch (e) {
-        console.error("データのパースに失敗しました", e);
-        alert("無効な同期コードです。");
-    }
+    } catch (e) { notify("インポートに失敗しました", "warn"); }
 }
 
 init();
