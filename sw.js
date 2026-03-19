@@ -1,4 +1,4 @@
-const CACHE_NAME = 'quiz-points-v2';
+const CACHE_NAME = 'quiz-points-v5';
 const assets = [
   './',
   './index.html',
@@ -8,9 +8,26 @@ const assets = [
 ];
 
 self.addEventListener('install', (e) => {
+  self.skipWaiting(); // 即座に新しいSWを有効化
   e.waitUntil(caches.open(CACHE_NAME).then(cache => cache.addAll(assets)));
 });
 
+self.addEventListener('activate', (e) => {
+  // 古いキャッシュを削除
+  e.waitUntil(
+    caches.keys().then(keys =>
+      Promise.all(keys.filter(k => k !== CACHE_NAME).map(k => caches.delete(k)))
+    ).then(() => self.clients.claim()) // 全タブに即時反映
+  );
+});
+
 self.addEventListener('fetch', (e) => {
-  e.respondWith(caches.match(e.request).then(res => res || fetch(e.request)));
+  // ネットワーク優先（最新ファイルを取得、失敗時のみキャッシュを使用）
+  e.respondWith(
+    fetch(e.request).then(res => {
+      const resClone = res.clone();
+      caches.open(CACHE_NAME).then(cache => cache.put(e.request, resClone));
+      return res;
+    }).catch(() => caches.match(e.request))
+  );
 });
