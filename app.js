@@ -66,19 +66,11 @@ function checkSyncData() {
         let importedLabs = null;
         let importedTitle = null;
 
-        // 超圧縮形式 (Version 2)
         if (data.v === 2 && data.m) {
-            // まず初期状態のラボを作成
             const tempLabs = [];
             for (let i = 0; i < TOTAL_LABS; i++) {
-                tempLabs.push({
-                    id: i,
-                    name: `研究室 ${i + 1}`,
-                    score: 0,
-                    totalWrongCaused: 0
-                });
+                tempLabs.push({ id: i, name: `研究室 ${i + 1}`, score: 0, totalWrongCaused: 0 });
             }
-            // 差分を適用
             data.m.forEach(item => {
                 const [idx, name, score, bonus] = item;
                 if (tempLabs[idx]) {
@@ -89,19 +81,10 @@ function checkSyncData() {
             });
             importedLabs = tempLabs;
             if (data.t) importedTitle = data.t;
-        }
-        // 前回の短縮形式
-        else if (data.l && Array.isArray(data.l)) {
-            importedLabs = data.l.map((item, i) => ({
-                id: i,
-                name: item[0],
-                score: item[1],
-                totalWrongCaused: item[2] || 0
-            }));
+        } else if (data.l && Array.isArray(data.l)) {
+            importedLabs = data.l.map((item, i) => ({ id: i, name: item[0], score: item[1], totalWrongCaused: item[2] || 0 }));
             if (data.t) importedTitle = data.t;
-        } 
-        // 旧形式（互換性用）
-        else if (data.labs) {
+        } else if (data.labs) {
             importedLabs = data.labs;
             if (data.title) importedTitle = data.title;
         }
@@ -126,47 +109,110 @@ function checkSyncData() {
     }
 }
 
-// スマホ同期モーダルの表示
-function showSyncModal() {
-    const modal = document.getElementById('sync-modal');
-    
-    // データ形式を「超圧縮」
+// 同期コードの生成（コピー用）
+function generateSyncCode() {
     const modifiedLabs = [];
     labs.forEach((lab, i) => {
         const defaultName = `研究室 ${i + 1}`;
         const isModified = lab.name !== defaultName || lab.score !== 0 || lab.totalWrongCaused !== 0;
-        
         if (isModified) {
-            modifiedLabs.push([
-                i, 
-                lab.name === defaultName ? 0 : lab.name, 
-                lab.score, 
-                lab.totalWrongCaused
-            ]);
+            modifiedLabs.push([i, lab.name === defaultName ? 0 : lab.name, lab.score, lab.totalWrongCaused]);
         }
     });
+    const data = { v: 2, t: tournamentTitle === "Quiz Points Master" ? 0 : tournamentTitle, m: modifiedLabs };
+    return btoa(unescape(encodeURIComponent(JSON.stringify(data))));
+}
 
-    const superCompactData = {
-        v: 2, // Version 2
-        t: tournamentTitle === "Quiz Points Master" ? 0 : tournamentTitle,
-        m: modifiedLabs
-    };
-    
-    const dataStr = JSON.stringify(superCompactData);
-    const encoded = btoa(unescape(encodeURIComponent(dataStr)));
-    
-    const baseUrl = window.location.origin + window.location.pathname;
-    const syncUrl = `${baseUrl}#${encoded}`;
+// 同期コードからデータを読み込む
+function importSyncCode(code) {
+    try {
+        const decoded = decodeURIComponent(escape(atob(code.trim())));
+        const data = JSON.parse(decoded);
+        
+        let importedLabs = null;
+        let importedTitle = null;
 
-    // QRの密度を下げるためにサイズを大きくし、エラー訂正レベルを L に。データそのものも大幅に削減。
+        if (data.v === 2 && data.m) {
+            const tempLabs = [];
+            for (let i = 0; i < TOTAL_LABS; i++) {
+                tempLabs.push({ id: i, name: `研究室 ${i + 1}`, score: 0, totalWrongCaused: 0 });
+            }
+            data.m.forEach(item => {
+                const [idx, name, score, bonus] = item;
+                if (tempLabs[idx]) {
+                    if (name !== 0) tempLabs[idx].name = name;
+                    tempLabs[idx].score = score;
+                    tempLabs[idx].totalWrongCaused = bonus;
+                }
+            });
+            importedLabs = tempLabs;
+            if (data.t) importedTitle = data.t;
+        }
+
+        if (importedLabs) {
+            labs = importedLabs;
+            if (importedTitle) {
+                tournamentTitle = importedTitle;
+                document.getElementById('tournament-title').textContent = tournamentTitle;
+            }
+            saveData();
+            renderScoreboard();
+            renderFormControls();
+            notify("データを同期しました！", "success");
+            return true;
+        }
+    } catch (e) {
+        console.error("Import error:", e);
+    }
+    notify("同期コードが無効です。", "error");
+    return false;
+}
+
+// スマホ同期モーダルの表示
+function showSyncModal() {
+    const modal = document.getElementById('sync-modal');
+    
+    // QRコードはサイトURLのみ（シンプルで読み取りやすい）
+    const siteUrl = window.location.origin + window.location.pathname;
     new QRious({
         element: document.getElementById('sync-qr'),
-        value: syncUrl,
-        size: 350,
+        value: siteUrl,
+        size: 300,
         level: 'L'
     });
-
+    
+    // 同期コードを生成してテキストエリアに表示
+    const code = generateSyncCode();
+    document.getElementById('sync-code-output').value = code;
+    
     modal.style.display = 'block';
+}
+
+// 同期コードをクリップボードにコピー
+function copySyncCode() {
+    const codeEl = document.getElementById('sync-code-output');
+    codeEl.select();
+    navigator.clipboard.writeText(codeEl.value).then(() => {
+        notify("同期コードをコピーしました！スマホ側で貼り付けてください。", "success");
+    }).catch(() => {
+        document.execCommand('copy');
+        notify("同期コードをコピーしました！", "success");
+    });
+}
+
+// 同期コードを貼り付けて読み込む
+function pasteSyncCode() {
+    const codeEl = document.getElementById('sync-code-input');
+    const code = codeEl.value.trim();
+    if (!code) {
+        notify("同期コードを貼り付けてください。", "error");
+        return;
+    }
+    if (confirm("このコードからデータを読み込みますか？\n(現在のデータは上書きされます)")) {
+        if (importSyncCode(code)) {
+            document.getElementById('sync-modal').style.display = 'none';
+        }
+    }
 }
 
 // 全画面切り替えヘルパー
