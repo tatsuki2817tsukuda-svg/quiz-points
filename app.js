@@ -1,4 +1,9 @@
 const TOTAL_LABS = 12;
+const DEFAULT_LAB_NAMES = [
+    "伊藤研究室", "大宮研究室", "垣野研究室", "衣笠研究室",
+    "兼松研究室", "高柳研究室", "高瀬研究室", "西田研究室",
+    "永野研究室", "山名研究室", "宮津研究室", "吉澤研究室"
+];
 let labs = [];
 let history = [];
 let editingLabIndex = null;
@@ -69,7 +74,12 @@ function checkSyncData() {
         if (data.v === 2 && data.m) {
             const tempLabs = [];
             for (let i = 0; i < TOTAL_LABS; i++) {
-                tempLabs.push({ id: i, name: `研究室 ${i + 1}`, score: 0, totalWrongCaused: 0 });
+                tempLabs.push({ 
+                    id: i, 
+                    name: DEFAULT_LAB_NAMES[i], 
+                    score: 0, 
+                    totalWrongCaused: 0 
+                });
             }
             data.m.forEach(item => {
                 const [idx, name, score, bonus] = item;
@@ -113,7 +123,7 @@ function checkSyncData() {
 function generateSyncCode() {
     const modifiedLabs = [];
     labs.forEach((lab, i) => {
-        const defaultName = `研究室 ${i + 1}`;
+        const defaultName = DEFAULT_LAB_NAMES[i];
         const isModified = lab.name !== defaultName || lab.score !== 0 || lab.totalWrongCaused !== 0;
         if (isModified) {
             modifiedLabs.push([i, lab.name === defaultName ? 0 : lab.name, lab.score, lab.totalWrongCaused]);
@@ -135,7 +145,12 @@ function importSyncCode(code) {
         if (data.v === 2 && data.m) {
             const tempLabs = [];
             for (let i = 0; i < TOTAL_LABS; i++) {
-                tempLabs.push({ id: i, name: `研究室 ${i + 1}`, score: 0, totalWrongCaused: 0 });
+                tempLabs.push({ 
+                    id: i, 
+                    name: DEFAULT_LAB_NAMES[i], 
+                    score: 0, 
+                    totalWrongCaused: 0 
+                });
             }
             data.m.forEach(item => {
                 const [idx, name, score, bonus] = item;
@@ -296,7 +311,7 @@ function resetLabs() {
     for (let i = 0; i < TOTAL_LABS; i++) {
         labs.push({
             id: i,
-            name: `研究室 ${i + 1}`,
+            name: DEFAULT_LAB_NAMES[i],
             score: 0,
             totalWrongCaused: 0
         });
