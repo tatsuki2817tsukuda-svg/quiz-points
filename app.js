@@ -36,10 +36,21 @@ function notify(message, type = 'info') {
     }, 4000);
 }
 
-// サウンドシステム (シンプルなビープ音)
+// サウンドシステム (シンプルなビープ音) - AudioContextを再利用
+let sharedAudioCtx = null;
+function getAudioContext() {
+    if (!sharedAudioCtx) {
+        sharedAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    }
+    if (sharedAudioCtx.state === 'suspended') {
+        sharedAudioCtx.resume();
+    }
+    return sharedAudioCtx;
+}
+
 function playSound(freq = 440, type = 'sine', duration = 0.1) {
     try {
-        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        const audioCtx = getAudioContext();
         const oscillator = audioCtx.createOscillator();
         const gainNode = audioCtx.createGain();
 
@@ -57,6 +68,13 @@ function playSound(freq = 440, type = 'sine', duration = 0.1) {
     } catch (e) {
         console.warn("Sound play failed", e);
     }
+}
+
+// HTMLエスケープ（XSS対策）
+function escapeHtml(str) {
+    const div = document.createElement('div');
+    div.textContent = str;
+    return div.innerHTML;
 }
 
 // スマホ同期用：URLハッシュの確認
@@ -374,7 +392,7 @@ function renderScoreboard() {
         card.onclick = () => openEditModal(lab.id);
         
         card.innerHTML = `
-            <span class="lab-name"><small style="opacity:0.5; font-size: 0.7rem; margin-right: 0.3rem;">#${lab.currentRank}</small>${lab.name}</span>
+            <span class="lab-name"><small style="opacity:0.5; font-size: 0.7rem; margin-right: 0.3rem;">#${lab.currentRank}</small>${escapeHtml(lab.name)}</span>
             <span class="lab-score" id="score-${lab.id}">${lab.score}<span class="tie-break-score" title="出題ボーナス (不正解を導いた数)">(ボ: ${lab.totalWrongCaused || 0})</span></span>
         `;
         scoreboard.appendChild(card);
@@ -687,7 +705,7 @@ function showFullResults() {
         
         const labsInRank = rankedLabs.filter(l => l.rank === rank);
         if (labsInRank.length > 0 && (labsInRank[0].score > 0 || rank === 1)) {
-            const names = labsInRank.map(l => l.name).join('<br>');
+            const names = labsInRank.map(l => escapeHtml(l.name)).join('<br>');
             const score = labsInRank[0].score;
             document.getElementById(`rank-${rank}-name`).innerHTML = names;
             document.getElementById(`rank-${rank}-score`).textContent = `${score} pts`;
@@ -705,7 +723,7 @@ function showFullResults() {
     lowerRankingsEl.innerHTML = lowerLabs.map((lab) => `
         <div class="ranking-row">
             <span class="rank-num">${lab.rank}</span>
-            <span class="rank-name">${lab.name}</span>
+            <span class="rank-name">${escapeHtml(lab.name)}</span>
             <span class="rank-score">${lab.score} pts</span>
         </div>
     `).join('');
@@ -759,6 +777,7 @@ function showFullResults() {
 // 紙吹雪システム
 let confettiActive = false;
 let confettiParticles = [];
+let confettiTimer = null;
 function startConfetti(count = 150) {
     const canvas = document.getElementById('confetti-canvas');
     if (!canvas) return;
@@ -773,6 +792,10 @@ function startConfetti(count = 150) {
         animate();
     }
 
+    // 15秒後に自動停止
+    clearTimeout(confettiTimer);
+    confettiTimer = setTimeout(() => stopConfetti(), 15000);
+
     for (let i = 0; i < count; i++) {
         confettiParticles.push({
             x: Math.random() * canvas.width,
@@ -781,7 +804,7 @@ function startConfetti(count = 150) {
             color: `hsl(${Math.random() * 360}, 80%, 60%)`,
             velocity: { 
                 x: Math.random() * 6 - 3, 
-                y: Math.random() * 5 + 4 // 少し速くした
+                y: Math.random() * 5 + 4
             },
             rotation: Math.random() * 360,
             rotationSpeed: Math.random() * 15 - 7.5
@@ -791,9 +814,6 @@ function startConfetti(count = 150) {
     function animate() {
         if (!confettiActive) return;
         ctx.clearRect(0, 0, canvas.width, canvas.height);
-        
-        // 画面外に完全に消えたら粒子を削除するロジック（オプション）
-        // ここでは簡易的に保持
         
         confettiParticles.forEach(p => {
             p.x += p.velocity.x;
@@ -814,8 +834,9 @@ function startConfetti(count = 150) {
 
 function stopConfetti() {
     confettiActive = false;
+    clearTimeout(confettiTimer);
     const canvas = document.getElementById('confetti-canvas');
-    canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height);
+    if (canvas) canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height);
 }
 
 // データエクスポート/インポート
@@ -885,12 +906,12 @@ function undoLastAction() {
     const last = history.shift();
     const host = labs.find(l => l.id == last.hostId);
     if (host) {
-        host.score -= last.hostPoints;
-        host.totalWrongCaused -= last.wrongCount;
+        host.score = Math.max(0, host.score - last.hostPoints);
+        host.totalWrongCaused = Math.max(0, host.totalWrongCaused - last.wrongCount);
     }
     last.correctIds.forEach(id => {
         const lab = labs.find(l => l.id === id);
-        if (lab) lab.score -= 1;
+        if (lab) lab.score = Math.max(0, lab.score - 1);
     });
     renderScoreboard();
     renderHistory();
@@ -924,7 +945,7 @@ function showRecoverModal() {
             item.className = 'backup-item';
             item.innerHTML = `<span>${data.time} - ${data.title}</span>`;
             item.onclick = () => {
-                if (confirm("このバックバックから復元しますか？")) {
+                if (confirm("このバックアップから復元しますか？")) {
                     labs = data.labs; history = data.history || []; calcRules = data.rules || calcRules;
                     tournamentTitle = data.title; saveData(); location.reload();
                 }
@@ -953,30 +974,6 @@ function setupKeyboardShortcuts() {
             }
         }
     });
-}
-
-// URLハッシュのチェックとインポート
-function checkUrlHash() {
-    const hash = window.location.hash;
-    if (hash.startsWith('#sync=')) {
-        const encodedData = hash.replace('#sync=', '');
-        processImport(encodedData);
-        window.history.replaceState(null, null, window.location.pathname);
-    }
-}
-
-function processImport(encodedData) {
-    try {
-        const jsonStr = decodeURIComponent(escape(atob(encodedData)));
-        const data = JSON.parse(jsonStr);
-        if (confirm(`共有されたデータ「${data.t || data.title}」をインポートしますか？`)) {
-            tournamentTitle = data.t || data.title || "Quiz Points Master";
-            labs = (data.l || data.labs || []).map((l, index) => ({
-                id: index, name: l.name || l[0], score: l.score || l[1], totalWrongCaused: l.totalWrongCaused || l[2] || 0
-            }));
-            history = []; saveData(); location.reload();
-        }
-    } catch (e) { notify("インポートに失敗しました", "warn"); }
 }
 
 init();
