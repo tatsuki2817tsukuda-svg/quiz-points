@@ -276,10 +276,19 @@ function init() {
     if (savedData) {
         try {
             labs = JSON.parse(savedData);
+            let needsSave = false;
             labs.forEach((lab, index) => {
                 if (lab.id === undefined) lab.id = index;
                 if (lab.totalWrongCaused === undefined) lab.totalWrongCaused = 0;
+                
+                // 旧デフォルト名（研究室 1...）であれば、新デフォルト名に自動変換
+                const oldDefault = `研究室 ${index + 1}`;
+                if (lab.name === oldDefault) {
+                    lab.name = DEFAULT_LAB_NAMES[index];
+                    needsSave = true;
+                }
             });
+            if (needsSave) saveData();
         } catch (e) {
             console.error("Error parsing saved data:", e);
             resetLabs();
