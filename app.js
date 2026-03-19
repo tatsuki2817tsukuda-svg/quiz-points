@@ -63,18 +63,41 @@ function checkSyncData() {
         const decoded = decodeURIComponent(escape(atob(hash)));
         const data = JSON.parse(decoded);
         
-        if (data && data.labs) {
+        let importedLabs = null;
+        let importedTitle = null;
+
+        // 新しい短縮形式のチェック
+        if (data.l && Array.isArray(data.l)) {
+            importedLabs = data.l.map((item, i) => ({
+                id: i,
+                name: item[0],
+                score: item[1],
+                totalWrongCaused: item[2] || 0
+            }));
+            if (data.t) importedTitle = data.t;
+        } 
+        // 旧形式のチェック（互換性用）
+        else if (data.labs) {
+            importedLabs = data.labs;
+            if (data.title) importedTitle = data.title;
+        }
+
+        if (importedLabs) {
             if (confirm("URLから新しいスコアデータを読み込みますか？\n(現在のデータは上書きされます)")) {
-                labs = data.labs;
-                if (data.title) tournamentTitle = data.title;
+                labs = importedLabs;
+                if (importedTitle) {
+                    tournamentTitle = importedTitle;
+                    document.getElementById('tournament-title').textContent = tournamentTitle;
+                }
                 saveData();
-                notify("データを読み込みました！", "success");
+                notify("データを同期しました！", "success");
+                renderScoreboard();
+                renderFormControls();
             }
         }
     } catch (e) {
         console.error("Sync data error:", e);
     } finally {
-        // ハッシュをクリアしてリロード時の再確認を防ぐ
         window.history.replaceState(null, null, window.location.pathname);
     }
 }
@@ -82,10 +105,16 @@ function checkSyncData() {
 // スマホ同期モーダルの表示
 function showSyncModal() {
     const modal = document.getElementById('sync-modal');
-    const data = JSON.stringify({ labs, title: tournamentTitle });
-    const encoded = btoa(unescape(encodeURIComponent(data)));
     
-    // 現在のベースURL（ハッシュなし）を取得
+    // データ形式を圧縮
+    const compactData = {
+        t: tournamentTitle,
+        l: labs.map(lab => [lab.name, lab.score, lab.totalWrongCaused])
+    };
+    
+    const dataStr = JSON.stringify(compactData);
+    const encoded = btoa(unescape(encodeURIComponent(dataStr)));
+    
     const baseUrl = window.location.origin + window.location.pathname;
     const syncUrl = `${baseUrl}#${encoded}`;
 
