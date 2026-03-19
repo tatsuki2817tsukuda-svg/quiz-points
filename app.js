@@ -66,8 +66,32 @@ function checkSyncData() {
         let importedLabs = null;
         let importedTitle = null;
 
-        // 新しい短縮形式のチェック
-        if (data.l && Array.isArray(data.l)) {
+        // 超圧縮形式 (Version 2)
+        if (data.v === 2 && data.m) {
+            // まず初期状態のラボを作成
+            const tempLabs = [];
+            for (let i = 0; i < TOTAL_LABS; i++) {
+                tempLabs.push({
+                    id: i,
+                    name: `研究室 ${i + 1}`,
+                    score: 0,
+                    totalWrongCaused: 0
+                });
+            }
+            // 差分を適用
+            data.m.forEach(item => {
+                const [idx, name, score, bonus] = item;
+                if (tempLabs[idx]) {
+                    if (name !== 0) tempLabs[idx].name = name;
+                    tempLabs[idx].score = score;
+                    tempLabs[idx].totalWrongCaused = bonus;
+                }
+            });
+            importedLabs = tempLabs;
+            if (data.t) importedTitle = data.t;
+        }
+        // 前回の短縮形式
+        else if (data.l && Array.isArray(data.l)) {
             importedLabs = data.l.map((item, i) => ({
                 id: i,
                 name: item[0],
@@ -76,7 +100,7 @@ function checkSyncData() {
             }));
             if (data.t) importedTitle = data.t;
         } 
-        // 旧形式のチェック（互換性用）
+        // 旧形式（互換性用）
         else if (data.labs) {
             importedLabs = data.labs;
             if (data.title) importedTitle = data.title;
@@ -106,23 +130,40 @@ function checkSyncData() {
 function showSyncModal() {
     const modal = document.getElementById('sync-modal');
     
-    // データ形式を圧縮
-    const compactData = {
-        t: tournamentTitle,
-        l: labs.map(lab => [lab.name, lab.score, lab.totalWrongCaused])
+    // データ形式を「超圧縮」
+    const modifiedLabs = [];
+    labs.forEach((lab, i) => {
+        const defaultName = `研究室 ${i + 1}`;
+        const isModified = lab.name !== defaultName || lab.score !== 0 || lab.totalWrongCaused !== 0;
+        
+        if (isModified) {
+            modifiedLabs.push([
+                i, 
+                lab.name === defaultName ? 0 : lab.name, 
+                lab.score, 
+                lab.totalWrongCaused
+            ]);
+        }
+    });
+
+    const superCompactData = {
+        v: 2, // Version 2
+        t: tournamentTitle === "Quiz Points Master" ? 0 : tournamentTitle,
+        m: modifiedLabs
     };
     
-    const dataStr = JSON.stringify(compactData);
+    const dataStr = JSON.stringify(superCompactData);
     const encoded = btoa(unescape(encodeURIComponent(dataStr)));
     
     const baseUrl = window.location.origin + window.location.pathname;
     const syncUrl = `${baseUrl}#${encoded}`;
 
+    // QRの密度を下げるためにサイズを大きくし、エラー訂正レベルを L に。データそのものも大幅に削減。
     new QRious({
         element: document.getElementById('sync-qr'),
         value: syncUrl,
-        size: 250,
-        level: 'M'
+        size: 350,
+        level: 'L'
     });
 
     modal.style.display = 'block';
