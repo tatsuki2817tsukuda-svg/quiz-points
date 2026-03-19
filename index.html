@@ -186,16 +186,17 @@
             <!-- ステップ2: 同期コードでデータを転送 -->
             <div style="text-align: left;">
                 <p style="font-size: 0.95rem; font-weight: 700; margin-bottom: 0.5rem; text-align: center;">② 同期コードでデータを転送</p>
+                <p style="font-size: 0.75rem; opacity: 0.6; margin-bottom: 0.8rem; text-align: center;">送信側でコピー → 受信側で貼り付けて読込<br>（どちら方向でもOK）</p>
                 
-                <label style="font-size: 0.8rem; opacity: 0.7; margin-bottom: 0.3rem; display: block;">PC側：このコードをコピー →</label>
-                <div style="display: flex; gap: 0.5rem; margin-bottom: 0.8rem;">
+                <label style="font-size: 0.8rem; opacity: 0.7; margin-bottom: 0.3rem; display: block;">📤 送信：この端末のデータをコピー</label>
+                <div style="display: flex; gap: 0.5rem; margin-bottom: 1rem;">
                     <textarea id="sync-code-output" readonly rows="2" style="flex: 1; font-size: 0.75rem; padding: 8px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.2); background: rgba(0,0,0,0.3); color: #fff; resize: none; font-family: monospace;"></textarea>
                     <button onclick="copySyncCode()" class="btn-primary" style="white-space: nowrap; padding: 8px 16px;">📋 コピー</button>
                 </div>
 
-                <label style="font-size: 0.8rem; opacity: 0.7; margin-bottom: 0.3rem; display: block;">スマホ側：コードを貼り付け →</label>
+                <label style="font-size: 0.8rem; opacity: 0.7; margin-bottom: 0.3rem; display: block;">📥 受信：他の端末のコードを貼り付け</label>
                 <div style="display: flex; gap: 0.5rem;">
-                    <textarea id="sync-code-input" rows="2" placeholder="ここに同期コードを貼り付け..." style="flex: 1; font-size: 0.75rem; padding: 8px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.2); background: rgba(0,0,0,0.3); color: #fff; resize: none; font-family: monospace;"></textarea>
+                    <textarea id="sync-code-input" rows="2" placeholder="ここにコードを貼り付け..." style="flex: 1; font-size: 0.75rem; padding: 8px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.2); background: rgba(0,0,0,0.3); color: #fff; resize: none; font-family: monospace;"></textarea>
                     <button onclick="pasteSyncCode()" class="btn-primary" style="white-space: nowrap; padding: 8px 16px;">📥 読込</button>
                 </div>
             </div>

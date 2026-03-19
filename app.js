@@ -201,9 +201,22 @@ function copySyncCode() {
 }
 
 // 同期コードを貼り付けて読み込む
-function pasteSyncCode() {
+async function pasteSyncCode() {
     const codeEl = document.getElementById('sync-code-input');
-    const code = codeEl.value.trim();
+    let code = codeEl.value.trim();
+    
+    // テキストエリアが空の場合、クリップボードから自動的に読み取る
+    if (!code) {
+        try {
+            code = await navigator.clipboard.readText();
+            codeEl.value = code;
+        } catch (e) {
+            notify("クリップボードへのアクセスが許可されていません。\n手動でコードを貼り付けてください。", "error");
+            return;
+        }
+    }
+    
+    code = code.trim();
     if (!code) {
         notify("同期コードを貼り付けてください。", "error");
         return;
