@@ -1,4 +1,4 @@
-const CACHE_NAME = 'quiz-points-v6';
+const CACHE_NAME = 'quiz-points-v7';
 const assets = [
   './',
   './index.html',
