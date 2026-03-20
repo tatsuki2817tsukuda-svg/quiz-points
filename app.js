@@ -687,11 +687,6 @@ function showFullResults() {
 
     const modal = document.getElementById('results-modal');
     const container = modal.querySelector('.results-container');
-    const items = [
-        { rank: 3, delay: 2000, sound: 440, shake: true },
-        { rank: 2, delay: 5000, sound: 554, shake: true },
-        { rank: 1, delay: 9000, sound: 659, shake: true, flash: true }
-    ];
 
     // 全リセット
     const lowerRankingsEl = document.getElementById('lower-rankings');
@@ -721,7 +716,7 @@ function showFullResults() {
 
     const lowerLabs = rankedLabs.filter(l => l.rank > 3);
     lowerRankingsEl.innerHTML = lowerLabs.map((lab) => `
-        <div class="ranking-row">
+        <div class="ranking-row" data-rank="${lab.rank}">
             <span class="rank-num">${lab.rank}</span>
             <span class="rank-name">${escapeHtml(lab.name)}</span>
             <span class="rank-score">${lab.score} pts</span>
@@ -730,9 +725,26 @@ function showFullResults() {
 
     modal.style.display = 'block';
     container.classList.remove('shake-active', 'flash-active');
-    notify("究極の結果発表を開始します...", "info");
+    notify("結果発表を開始します...", "info");
 
-    // 順次表示
+    // 順位発表：下位から順に（12位→4位）
+    const rows = Array.from(lowerRankingsEl.querySelectorAll('.ranking-row')).reverse();
+    rows.forEach((row, i) => {
+        setTimeout(() => {
+            row.classList.add('revealed');
+            playSound(330 + i * 20, 'sine', 0.1);
+        }, i * 350);
+    });
+
+    // 4位以下の表示にかかる時間を考慮してTop3の遅延を調整
+    const lowerRevealTime = rows.length * 350;
+    const items = [
+        { rank: 3, delay: lowerRevealTime + 1000, sound: 440, shake: true },
+        { rank: 2, delay: lowerRevealTime + 3500, sound: 554, shake: true },
+        { rank: 1, delay: lowerRevealTime + 7000, sound: 659, shake: true, flash: true }
+    ];
+
+    // Top 3 順次表示
     items.forEach(config => {
         setTimeout(() => {
             const item = document.querySelector(`.podium-item.rank-${config.rank}`);
@@ -756,18 +768,11 @@ function showFullResults() {
                 
                 if (config.rank === 1) {
                     startConfetti(400); // 大量の紙吹雪
-                    // 連続バースト
                     setTimeout(() => startConfetti(200), 1000);
                     setTimeout(() => startConfetti(200), 2000);
                     
                     playSound(880, 'sine', 1.0);
                     notify("✨🏆 優勝おめでとうございます！ 🏆✨", "success");
-
-                    // 1位発表の少し後に4位以下を表示
-                    setTimeout(() => {
-                        lowerRankingsEl.classList.add('revealed');
-                        playSound(330, 'sine', 0.3);
-                    }, 1500);
                 }
             }
         }, config.delay);
